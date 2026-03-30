@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Canal+ - Administration</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        * { box-sizing: border-box; font-family: Arial, sans-serif; }
+        body { background-color: #f0f2f5; margin: 0; padding: 20px; }
+        
+        .admin-header { background: #000; color: #fff; padding: 20px; border-radius: 10px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+        
+        .tab-container { display: flex; gap: 10px; margin-bottom: 20px; }
+        .tab { padding: 10px 20px; background: #ddd; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        .tab.active { background: #000; color: #fff; }
+
+        .section { display: none; }
+        .section.active { display: block; }
+
+        .card { background: #fff; padding: 15px; border-radius: 10px; margin-bottom: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); border-left: 5px solid #000; }
+        .card-header { display: flex; justify-content: space-between; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+        .user-phone { font-weight: bold; color: #000; }
+        .amount { color: #27ae60; font-weight: bold; }
+        
+        .details { font-size: 13px; color: #666; margin-bottom: 10px; }
+        .actions { display: flex; gap: 10px; }
+        
+        .btn { padding: 8px 15px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; color: #fff; }
+        .btn-approve { background: #27ae60; }
+        .btn-reject { background: #e74c3c; }
+
+        .status-badge { font-size: 11px; padding: 3px 8px; border-radius: 10px; text-transform: uppercase; }
+        .pending { background: #f1c40f; color: #000; }
+    </style>
+</head>
+<body>
+
+    <div class="admin-header">
+        <h2>Panel Admin CANAL+</h2>
+        <button onclick="location.reload()" class="btn" style="background:#444;">Actualiser</button>
+    </div>
+
+    <div class="tab-container">
+        <div class="tab active" onclick="showSection('recharges', this)">Recharges</div>
+        <div class="tab" onclick="showSection('retraits', this)">Retraits</div>
+    </div>
+
+    <div id="recharges" class="section active">
+        <h3>Demandes de Dépôt</h3>
+        <div id="rechargeList">Chargement...</div>
+    </div>
+
+    <div id="retraits" class="section">
+        <h3>Demandes de Retrait</h3>
+        <div id="retraitList">Chargement...</div>
+    </div>
+
+    <script>
+        const dbUrl = "https://canal-e4274-default-rtdb.firebaseio.com";
+
+        function showSection(id, tab) {
+            document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+            tab.classList.add('active');
+        }
+
+        // --- CHARGEMENT DES RECHARGES ---
+        async function fetchRecharges() {
+            const res = await fetch(`${dbUrl}/recharges_en_attente.json`);
+            const data = await res.json();
+            const list = document.getElementById('rechargeList');
+            list.innerHTML = "";
+
+            if (!data) { list.innerHTML = "Aucune recharge en attente."; return; }
+
+            for (let id in data) {
+                const item = data[id];
+                if (item.status === "en_attente") {
+                    list.innerHTML += `
+                        <div class="card">
+                            <div class="card-header">
+                                <span class="user-phone">Compte: ${item.userAccount}</span>
+                                <span class="amount">${item.amount} FC</span>
+                            </div>
+                            <div class="details">
+                                <strong>Réseau:</strong> ${item.network} <br>
+                                <strong>TID:</strong> <span style="color:blue">${item.transactionID}</span> <br>
+                                <strong>Expéditeur:</strong> ${item.senderPhone} <br>
+                                <strong>Date:</strong> ${item.date}
+                            </div>
+                            <div class="actions">
+                                <button class="btn btn-approve" onclick="approveRecharge('${id}', '${item.userAccount}', ${item.amount})">Approuver</button>
+                                <button class="btn btn-reject" onclick="rejectAction('recharges_en_attente', '${id}')">Rejeter</button>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+        }
+
+        // --- APPROUVER UNE RECHARGE (AJOUTER SOLDE) ---
+        async function approveRecharge(id, phone, amount) {
+            if (!confirm("Voulez-vous créditer " + amount + " FC à ce compte ?")) return;
+
+            try {
+                // 1. Trouver l'utilisateur
+                const userRes = await fetch(`${dbUrl}/users.json`);
+                const users = await userRes.json();
+                let userKey = null;
+                let currentBalance = 0;
+
+                for (let key in users) {
+                    if (users[key].phone === phone) {
+                        userKey = key;
+                        currentBalance = users[key].balance || 0;
+                        break;
+                    }
+                }
+
+                if (userKey) {
+                    // 2. Mettre à jour son solde
+                    await fetch(`${dbUrl}/users/${userKey}.json`, {
+                        method: 'PATCH',
+                        body: JSON.stringify({ balance: currentBalance + amount })
+                    });
+
+                    // 3. Marquer la recharge comme validée
+                    await fetch(`${dbUrl}/recharges_en_attente/${id}.json`, {
+                        method: 'PATCH',
+                        body: JSON.stringify({ status: "Validé" })
+                    });
+
+                    alert("Compte crédité avec succès !");
+                    fetchRecharges();
+                }
+            } catch (e) { alert("Erreur lors de la validation."); }
+        }
+
+        // --- CHARGEMENT DES RETRAITS ---
+        async function fetchRetraits() {
+            const res = await fetch(`${dbUrl}/retraits_demandes.json`);
+            const data = await res.json();
+            const list = document.getElementById('retraitList');
+            list.innerHTML = "";
+
+            if (!data) { list.innerHTML = "Aucun retrait en attente."; return; }
+
+            for (let id in data) {
+                const item = data[id];
+                if (item.status === "En attente") {
+                    list.innerHTML += `
+                        <div class="card" style="border-left-color: #e67e22;">
+                            <div class="card-header">
+                                <span class="user-phone">Client: ${item.user}</span>
+                                <span class="amount" style="color:red">-${item.amount} FC</span>
+                            </div>
+                            <div class="details">
+                                <strong>Net à envoyer:</strong> ${item.netAmount} FC <br>
+                                <strong>Numéro Réception:</strong> ${item.receiver} <br>
+                                <strong>Date:</strong> ${item.date}
+                            </div>
+                            <div class="actions">
+                                <button class="btn btn-approve" onclick="updateStatus('retraits_demandes', '${id}', 'Payé')">Marquer comme Payé</button>
+                                <button class="btn btn-reject" onclick="rejectAction('retraits_demandes', '${id}')">Rejeter</button>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+        }
+
+        // --- FONCTIONS GÉNÉRIQUES ---
+        async function updateStatus(path, id, status) {
+            await fetch(`${dbUrl}/${path}/${id}.json`, {
+                method: 'PATCH',
+                body: JSON.stringify({ status: status })
+            });
+            alert("Statut mis à jour : " + status);
+            location.reload();
+        }
+
+        async function rejectAction(path, id) {
+            if (!confirm("Voulez-vous rejeter cette demande ?")) return;
+            await fetch(`${dbUrl}/${path}/${id}.json`, {
+                method: 'PATCH',
+                body: JSON.stringify({ status: "Rejeté" })
+            });
+            alert("Demande rejetée.");
+            location.reload();
+        }
+
+        // Lancement
+        fetchRecharges();
+        fetchRetraits();
+    </script>
+</body>
+</html>
